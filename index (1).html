@@ -1,0 +1,717 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Heart Rate Monitor Prototype</title>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#eef2f5;--panel:#fff;--ink:#14202b;--mute:#5b6b7a;--line:#d3dce4;--accent:#d7263d;--trace:#3e5c76;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0f1a24;--panel:#16242f;--ink:#e6edf3;--mute:#9fb0bf;--line:#2a3b49;--accent:#ff5a6e;--trace:#7fa6c9}}
+:root[data-theme="dark"]{--bg:#0f1a24;--panel:#16242f;--ink:#e6edf3;--mute:#9fb0bf;--line:#2a3b49;--accent:#ff5a6e;--trace:#7fa6c9}
+*{box-sizing:border-box}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.4 "Bricolage Grotesque",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:560px;margin:0 auto;padding:16px}
+.bpm{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px;display:flex;align-items:baseline;gap:12px}
+.num{font-size:96px;font-weight:800;line-height:1;color:var(--accent);font-variant-numeric:tabular-nums}
+.unit{color:var(--mute);font-size:20px}
+.beat{width:14px;height:14px;border-radius:50%;background:var(--accent);margin-left:auto;opacity:.25;align-self:center}
+.beat.on{opacity:1;transition:opacity .05s}
+.beat.off{transition:opacity .4s}
+.status{margin:10px 2px;color:var(--mute);font-size:14px;min-height:20px}
+canvas{display:block;width:100%;height:180px;background:var(--panel);border:1px solid var(--line);border-radius:14px;margin-top:12px}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px}
+.stat{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px}
+.stat b{display:block;font-size:24px;font-variant-numeric:tabular-nums}
+.stat span{color:var(--mute);font-size:13px}
+.row{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+button{font:inherit;font-weight:600;padding:12px 16px;border-radius:10px;border:1px solid var(--line);background:var(--panel);color:var(--ink);min-height:44px;flex:1}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button:focus-visible{outline:3px solid var(--trace);outline-offset:2px}
+.voice{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px;margin-top:12px}
+.vtop{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+.vnote{font-size:56px;font-weight:800;line-height:1;color:var(--trace);min-width:2.4em;font-variant-numeric:tabular-nums}
+.vhz{font-size:20px;font-variant-numeric:tabular-nums}
+.vcent{color:var(--mute);font-size:16px;font-variant-numeric:tabular-nums}
+.vstat{color:var(--mute);font-size:13px;margin:6px 0 0;min-height:18px}
+#pchart{height:130px;margin-top:8px;border:0;background:transparent;border-top:1px solid var(--line);border-radius:0}
+.voice button{margin-top:8px;width:100%}
+.trow{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:10px;font-size:14px;color:var(--mute)}
+.trow select{font:inherit;min-height:40px;padding:4px 8px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--ink)}
+.trow label{display:flex;gap:6px;align-items:center}
+.crit{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px}
+.crit>div{border:1px solid var(--line);border-radius:10px;padding:8px;min-width:0}
+.crit b{display:block;font-size:18px;font-variant-numeric:tabular-nums}
+.crit span{font-size:12px;color:var(--mute)}
+.crit>div.met{border-color:var(--trace);box-shadow:inset 0 0 0 1px var(--trace)}
+.crit>div.met b::after{content:" met";font-size:12px;font-weight:600;color:var(--trace)}
+.seg{display:flex;gap:0;margin-top:12px}
+.seg button{border-radius:0;flex:1}
+.seg button:first-child{border-radius:10px 0 0 10px}
+.seg button:last-child{border-radius:0 10px 10px 0}
+.seg button[aria-pressed="true"]{background:var(--trace);border-color:var(--trace);color:var(--bg)}
+#ppgc{height:64px;margin-top:8px;display:none}
+.simout{margin-top:10px;display:grid;gap:10px}
+.simrow{display:grid;grid-template-columns:90px 1fr;gap:4px 10px;align-items:center}
+.simrow b{font-size:14px}
+.simrow .bar{height:10px;background:var(--line);border-radius:5px;overflow:hidden}
+.simrow .bar i{display:block;height:100%;background:var(--trace)}
+.simrow span{grid-column:2;color:var(--mute);font-size:12px}
+textarea{width:100%;height:90px;margin-top:12px;border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--ink);font:12px/1.3 ui-monospace,Menlo,Consolas,monospace;padding:8px;display:none}
+</style>
+</head>
+<body>
+<main>
+  <div class="bpm"><span class="num" id="bpm">--</span><span class="unit">bpm</span><span class="beat" id="beat"></span></div>
+  <div class="status" id="status">Source: simulated. Tap Connect strap to use a Bluetooth heart-rate device.</div>
+  <canvas id="chart" width="560" height="180" aria-label="Heart rate over the last 60 seconds"></canvas>
+  <div class="stats">
+    <div class="stat"><b id="avg">--</b><span>Average</span></div>
+    <div class="stat"><b id="range">--</b><span>Min / max</span></div>
+    <div class="stat"><b id="hrv">--</b><span>HRV (RMSSD, ms)</span></div>
+  </div>
+  <section class="voice" aria-label="Voice pitch">
+    <div class="vtop"><span class="vnote" id="vnote">--</span><span class="vhz" id="vhz">-- Hz</span><span class="vcent" id="vcent"></span></div>
+    <div class="vstat" id="vstat">Microphone off. Headphones are recommended so the tone is not picked up.</div>
+    <div class="vstat" id="vmatch"></div>
+    <div class="vstat" id="vprog"></div>
+    <div class="crit" aria-label="Challenge criteria"><div id="cClar"><b>--</b><span>Clarity</span></div><div id="cRange"><b>--</b><span>Range</span></div><div id="cVol"><b>--</b><span>Volume</span></div></div>
+    <div class="trow">
+      <label>Tone pitch
+        <select id="tNote" aria-label="Tone note"><option value="0" selected>C</option><option value="1">C#</option><option value="2">D</option><option value="3">D#</option><option value="4">E</option><option value="5">F</option><option value="6">F#</option><option value="7">G</option><option value="8">G#</option><option value="9">A</option><option value="10">A#</option><option value="11">B</option></select>
+        <select id="tOct" aria-label="Tone octave"><option>1</option><option>2</option><option>3</option><option selected>4</option><option>5</option><option>6</option><option>7</option><option>8</option></select>
+      </label>
+      <label><input type="checkbox" id="fold" checked> Match any octave</label>
+      <button id="flip" type="button" style="width:auto;margin:0;flex:0 0 auto">Try other direction</button>
+    </div>
+    <canvas id="pchart" width="560" height="130" aria-label="Voice pitch over the last 10 seconds"></canvas>
+    <button id="mic">Start microphone</button>
+  </section>
+  <section class="voice" aria-label="Mastery simulation">
+    <div class="vstat" style="margin:0 0 6px">Mastery simulation: a simulated voice at set skill levels runs through the same challenge, to show how clarity, volume, and range gate progress.</div>
+    <div class="trow">
+      <label>Level <select id="simLevel"><option value="all" selected>All levels</option><option value="0">Novice</option><option value="1">Developing</option><option value="2">Proficient</option><option value="3">Expert</option></select></label>
+      <label>Speed <select id="simSpeed"><option value="1">x1</option><option value="4">x4</option><option value="10" selected>x10</option></select></label>
+    </div>
+    <button id="simRun">Run simulation</button>
+    <div class="simout" id="simOut"></div>
+  </section>
+  <div class="seg" role="group" aria-label="Signal source">
+    <button id="mSim" aria-pressed="true">Simulated</button>
+    <button id="mBle" aria-pressed="false">Bluetooth strap</button>
+    <button id="mCam" aria-pressed="false">Fingertip camera</button>
+  </div>
+  <canvas id="ppgc" width="560" height="64" aria-label="Fingertip pulse waveform"></canvas>
+  <div class="vstat" id="camdiag"></div>
+  <div class="row">
+    <button class="primary" id="connect">Connect strap</button>
+    <button id="rec">Start recording</button>
+    <button id="exp">Show CSV</button>
+    <button id="tone" aria-pressed="false">Tone: off</button>
+  </div>
+  <textarea id="csv" readonly aria-label="Recorded data as CSV"></textarea>
+</main>
+<script>
+(function(){
+  var $=function(i){return document.getElementById(i)};
+  var WINDOW=60000, samples=[], rrs=[], mode='sim', recording=false, log=[], bleDev=null, simTimer=null, simBpm=72;
+  var statusEl=$('status');
+
+  function setStatus(t){statusEl.textContent=t}
+
+  function push(bpm,rr,src){
+    var now=Date.now();
+    samples.push({t:now,bpm:bpm});
+    while(samples.length&&now-samples[0].t>WINDOW)samples.shift();
+    if(rr&&rr.length){rr.forEach(function(r){lastRrT=Date.now();if(toneOn&&rrs.length){if(r>rrs[rrs.length-1]+RR_STEP)toneStart();else toneStop()}rrs.push(r)});while(rrs.length>40)rrs.shift()}
+    if(recording)log.push([new Date(now).toISOString(),bpm,(rr||[]).map(function(r){return r.toFixed(0)}).join(' '),src].join(','));
+    $('bpm').textContent=bpm;
+    var b=$('beat');b.className='beat on';setTimeout(function(){b.className='beat off'},80);
+    update();
+  }
+
+  function update(){
+    if(!samples.length)return;
+    var v=samples.map(function(s){return s.bpm});
+    var avg=v.reduce(function(a,b){return a+b},0)/v.length;
+    $('avg').textContent=Math.round(avg);
+    $('range').textContent=Math.min.apply(null,v)+' / '+Math.max.apply(null,v);
+    if(rrs.length>2){
+      var d=0;for(var i=1;i<rrs.length;i++){var x=rrs[i]-rrs[i-1];d+=x*x}
+      $('hrv').textContent=Math.round(Math.sqrt(d/(rrs.length-1)));
+    }
+    draw();
+  }
+
+  function draw(){
+    var c=$('chart'),r=window.devicePixelRatio||1,w=c.clientWidth,h=c.clientHeight;
+    if(c.width!==w*r){c.width=w*r;c.height=h*r}
+    var g=c.getContext('2d');g.setTransform(r,0,0,r,0,0);g.clearRect(0,0,w,h);
+    var cs=getComputedStyle(document.documentElement);
+    var line=cs.getPropertyValue('--line'),trace=cs.getPropertyValue('--trace'),mute=cs.getPropertyValue('--mute');
+    var vals=samples.map(function(s){return s.bpm});
+    var lo=Math.min.apply(null,vals.concat([60]))-5,hi=Math.max.apply(null,vals.concat([100]))+5;
+    g.strokeStyle=line;g.fillStyle=mute;g.font='11px sans-serif';g.lineWidth=1;
+    for(var k=0;k<4;k++){var y=10+(h-20)*k/3;g.beginPath();g.moveTo(34,y);g.lineTo(w,y);g.stroke();g.fillText(Math.round(hi-(hi-lo)*k/3),2,y+4)}
+    if(samples.length<2)return;
+    var now=Date.now();g.strokeStyle=trace;g.lineWidth=2;g.beginPath();
+    samples.forEach(function(s,i){
+      var x=34+(w-34)*(1-(now-s.t)/WINDOW),y=10+(h-20)*(1-(s.bpm-lo)/(hi-lo));
+      i?g.lineTo(x,y):g.moveTo(x,y)});
+    g.stroke();
+  }
+
+  // Sustained middle C (261.63 Hz): starts when an R-R interval exceeds the previous one by more than RR_STEP ms,
+  // holds while intervals keep lengthening, stops when an interval is the same (within RR_STEP) or shorter.
+  var audioCtx=null,toneOn=false,RR_STEP=10,TONE_HZ=261.63,toneMidi=60,FADE_TC=0.12,osc=null,gainNode=null,lastRrT=0;
+  function toneStart(){
+    if(!audioCtx||osc)return;
+    osc=audioCtx.createOscillator();gainNode=audioCtx.createGain();var t=audioCtx.currentTime;
+    osc.type='sine';osc.frequency.value=TONE_HZ;
+    gainNode.gain.setValueAtTime(0,t);gainNode.gain.linearRampToValueAtTime(0.3,t+0.03);
+    osc.connect(gainNode);
+    if(!matchNode){matchNode=audioCtx.createGain();matchNode.gain.value=1-matchLevel;matchNode.connect(audioCtx.destination)}
+    gainNode.connect(matchNode);osc.start(t);
+  }
+  function toneStop(){
+    if(!osc)return;
+    var t=audioCtx.currentTime,o=osc,g=gainNode;osc=null;gainNode=null;
+    g.gain.cancelScheduledValues(t);g.gain.setValueAtTime(g.gain.value,t);g.gain.setTargetAtTime(0,t,FADE_TC);o.stop(t+FADE_TC*6);
+  }
+  setInterval(function(){if(osc&&Date.now()-lastRrT>3000)toneStop()},500);
+
+  // Simulated source
+  function startSim(){
+    stopSim();
+    var MEAN_RR=857, AMP=120, PERIOD=10, t0=Date.now(); // ms, ms, seconds (about 70 bpm, 6 cycles per minute)
+    (function beat(){
+      var t=(Date.now()-t0)/1000;
+      var rr=MEAN_RR+AMP*Math.sin(2*Math.PI*t/PERIOD);
+      push(Math.round(60000/rr),[rr],'sim');
+      simTimer=setTimeout(beat,rr);
+    })();
+  }
+  function stopSim(){if(simTimer){clearTimeout(simTimer);simTimer=null}}
+
+  // Bluetooth Heart Rate Profile (service 0x180D, characteristic 0x2A37)
+  function parseHR(dv){
+    var f=dv.getUint8(0),o=1,bpm;
+    if(f&1){bpm=dv.getUint16(o,true);o+=2}else{bpm=dv.getUint8(o);o+=1}
+    if(f&0x08)o+=2;
+    var rr=[];
+    if(f&0x10){while(o+1<dv.byteLength){rr.push(dv.getUint16(o,true)/1024*1000);o+=2}}
+    var contact=(f&0x04)?true:((f&0x02)?false:null);
+    return {bpm:bpm,rr:rr,contact:contact};
+  }
+
+  async function connectBle(){
+    if(!navigator.bluetooth){
+      setStatus('Web Bluetooth is unavailable here. Use Chrome on Android and open the page directly, outside any embedded preview.');
+      return;
+    }
+    try{
+      setStatus('Select a heart-rate device from the list.');
+      var dev=await navigator.bluetooth.requestDevice({filters:[{services:['heart_rate']}]});
+      bleDev=dev;
+      dev.addEventListener('gattserverdisconnected',function(){
+        if(mode==='ble')setStatus('Signal lost: '+(dev.name||'device')+' disconnected. Tap Connect strap to retry.');
+      });
+      setStatus('Connecting to '+(dev.name||'device')+'...');
+      var server=await dev.gatt.connect();
+      var svc=await server.getPrimaryService('heart_rate');
+      var ch=await svc.getCharacteristic('heart_rate_measurement');
+      ch.addEventListener('characteristicvaluechanged',function(e){
+        var p=parseHR(e.target.value);
+        if(p.contact===false){setStatus('Connected: '+(dev.name||'device')+'. No skin contact detected.');}
+        else setStatus('Source: '+(dev.name||'Bluetooth device')+(p.rr.length?' (RR intervals available)':' (BPM only)'));
+        if(p.bpm>0&&mode==='ble')push(p.bpm,p.rr,'ble');
+      });
+      await ch.startNotifications();
+      setMode('ble',true);
+    }catch(err){
+      setStatus('Connection failed: '+(err&&err.message?err.message:err));
+    }
+  }
+
+  // Fingertip camera PPG: rear camera plus torch. Mean red level per frame is high-pass and low-pass filtered,
+  // peaks (with sub-frame interpolation) give beat times, and beat spacing gives R-R intervals.
+  var camStream=null,camVideo=null,camCanvas=null,camCtx=null,camHandle=null,camGen=0,camTorch=false;
+  var camS={pT:0,base:null,lp:0,amp:0,hist:[],lastPeak:0,recent:[],rejects:0,finger:false};
+  function camReset(){camS.pT=0;camS.base=null;camS.lp=0;camS.amp=0;camS.hist=[];camS.lastPeak=0;camS.recent=[];camS.rejects=0}
+  function median3(a){var s=a.slice(-3).sort(function(x,y){return x-y});return s[s.length>>1]}
+
+  var camTorchErr='',camInfo='';
+  // Profile 0: small, fast frames. Profile 1: 1280x720 at 30 fps, used if the torch is unavailable at profile 0.
+  function camConstraints(p,id){
+    var v=p===0?{width:{ideal:320},height:{ideal:240},frameRate:{ideal:60}}:{width:{ideal:1280},height:{ideal:720},frameRate:{ideal:30}};
+    if(id)v.deviceId={exact:id};else v.facingMode={ideal:'environment'};
+    return {video:v,audio:false};
+  }
+  // Prefer the main rear camera (the one that sits next to the flash) and confirm the torch actually turned on.
+  async function pickBackCamera(stream,profile){
+    try{
+      var devs=await navigator.mediaDevices.enumerateDevices();
+      var cams=devs.filter(function(d){return d.kind==='videoinput'&&/back|rear|environment/i.test(d.label)});
+      var cur=stream.getVideoTracks()[0].getSettings().deviceId;
+      var main=cams.filter(function(d){return /\b0\b/.test(d.label)})[0]||cams[0];
+      if(main&&main.deviceId&&main.deviceId!==cur){
+        stream.getTracks().forEach(function(t){t.stop()});
+        return await navigator.mediaDevices.getUserMedia(camConstraints(profile,main.deviceId));
+      }
+    }catch(e){}
+    return stream;
+  }
+  async function tryTorch(track){
+    try{
+      await track.applyConstraints({advanced:[{torch:true}]});
+      var s=track.getSettings?track.getSettings():{};
+      if(s.torch===true){camTorchErr='';return true}
+      var c=track.getCapabilities?track.getCapabilities():{};
+      camTorchErr=c&&c.torch?'not applied':'browser reports no torch';
+      return false;
+    }catch(e){camTorchErr=e&&e.name?e.name:'error';return false}
+  }
+  async function startCam(profile){
+    profile=profile||0;
+    var gen=++camGen;
+    if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){setStatus('Camera access is unavailable here. Open the page directly in Chrome.');return}
+    try{
+      var stream=await navigator.mediaDevices.getUserMedia(camConstraints(profile));
+      if(gen!==camGen||mode!=='cam'){stream.getTracks().forEach(function(t){t.stop()});return}
+      camTorch=false;camTorchErr='';
+      stream=await pickBackCamera(stream,profile);
+      if(gen!==camGen||mode!=='cam'){stream.getTracks().forEach(function(t){t.stop()});return}
+      camStream=stream;
+      var track=stream.getVideoTracks()[0];
+      camVideo=document.createElement('video');camVideo.muted=true;camVideo.playsInline=true;
+      camVideo.style.cssText='position:fixed;left:0;top:0;width:2px;height:2px;opacity:0;pointer-events:none';
+      document.body.appendChild(camVideo);camVideo.srcObject=stream;
+      await camVideo.play();
+      if(gen!==camGen)return;
+      camTorch=await tryTorch(track);
+      if(!camTorch){await new Promise(function(res){setTimeout(res,600)});if(gen!==camGen)return;camTorch=await tryTorch(track)}
+      var capKeys='';try{capKeys=Object.keys(track.getCapabilities?track.getCapabilities():{}).join(',')}catch(e){}
+      camInfo=(track.label||'camera')+' (profile '+profile+'), capabilities: '+(capKeys||'none');
+      if(!camTorch&&profile===0){stopCam();startCam(1);return}
+      $('camdiag').textContent=camInfo+(camTorchErr?'; torch: '+camTorchErr:'');
+      camCanvas=document.createElement('canvas');camCanvas.width=24;camCanvas.height=24;
+      camCtx=camCanvas.getContext('2d',{willReadFrequently:true});
+      camReset();camS.finger=false;camDiag.n=0;camDiag.t0=0;camDiag.fps=0;camDiag.peaks=0;
+      setTimeout(function(){if(gen===camGen&&camDiag.fps===0)setStatus('No camera frames received. Reload the page and open the link directly in Chrome.')},3000);
+      $('ppgc').style.display='block';
+      setStatus(camTorch?'Source: fingertip camera. Cover the lens and flash with a fingertip.':'Source: fingertip camera. The browser could not turn on the flash. Cover the lens and use strong light, or try the phone flashlight.');
+      camSchedule();
+    }catch(err){setStatus('Camera unavailable: '+(err&&err.message?err.message:err))}
+  }
+  function camSchedule(){
+    if(!camVideo)return;
+    if(camVideo.requestVideoFrameCallback)camHandle=camVideo.requestVideoFrameCallback(camFrame);
+    else camHandle=requestAnimationFrame(camFrame);
+  }
+  function stopCam(){
+    camGen++;
+    if(camVideo){
+      if(camHandle!==null){
+        if(camVideo.cancelVideoFrameCallback){try{camVideo.cancelVideoFrameCallback(camHandle)}catch(e){}}
+        else cancelAnimationFrame(camHandle);
+      }
+      camVideo.srcObject=null;
+      if(camVideo.parentNode)camVideo.parentNode.removeChild(camVideo);
+    }
+    camHandle=null;
+    if(camStream){camStream.getTracks().forEach(function(t){t.stop()});camStream=null}
+    camVideo=null;
+    $('ppgc').style.display='none';$('camdiag').textContent='';
+  }
+  var camDiag={n:0,t0:0,fps:0,peaks:0};
+  function camBeat(pt){
+    var S=camS;camDiag.peaks++;
+    if(!S.lastPeak){S.lastPeak=pt;return}
+    var rr=pt-S.lastPeak;S.lastPeak=pt;
+    if(rr>2000){S.recent=[];return}
+    var med=S.recent.length>=3?median3(S.recent):0;
+    if(med&&Math.abs(rr-med)/med>0.35){if(++S.rejects>=3){S.recent=[];S.rejects=0}return}
+    S.rejects=0;S.recent.push(rr);if(S.recent.length>5)S.recent.shift();
+    push(Math.round(60000/median3(S.recent)),[rr],'cam');
+  }
+  function camFrame(now){
+    if(!camStream||mode!=='cam')return;
+    camSchedule();
+    var vw=camVideo.videoWidth,vh=camVideo.videoHeight;
+    if(!vw)return;
+    var cw=vw/2,ch=vh/2;
+    camCtx.drawImage(camVideo,(vw-cw)/2,(vh-ch)/2,cw,ch,0,0,24,24);
+    var d=camCtx.getImageData(0,0,24,24).data,r=0,g=0,n=d.length/4;
+    for(var i=0;i<d.length;i+=4){r+=d[i];g+=d[i+1]}
+    r/=n;g/=n;
+    camDiag.n++;if(!camDiag.t0)camDiag.t0=now;
+    if(now-camDiag.t0>=500){
+      camDiag.fps=Math.round(camDiag.n*1000/(now-camDiag.t0));camDiag.n=0;camDiag.t0=now;
+      $('camdiag').textContent='R '+Math.round(r)+', G '+Math.round(g)+', '+camDiag.fps+' fps, torch '+(camTorch?'on':'off'+(camTorchErr?' ('+camTorchErr+')':''))+', beats '+camDiag.peaks+(camS.finger?'':', no finger detected')+' | '+camInfo;
+    }
+    var S=camS,finger=r>80&&r>g*1.3;
+    if(!finger){
+      if(S.finger){camReset();setStatus('Cover the lens and flash with a fingertip.')}
+      S.finger=false;drawPpg();return;
+    }
+    if(!S.finger){setStatus('Reading pulse. Keep the finger still.');S.finger=true}
+    var dt=S.pT?Math.min(0.2,(now-S.pT)/1000):0;S.pT=now;
+    if(S.base===null||dt===0){S.base=r;return}
+    S.base+=(r-S.base)*(1-Math.exp(-dt/0.7));
+    S.lp+=(-(r-S.base)-S.lp)*(1-Math.exp(-dt/0.04));
+    S.amp+=(Math.abs(S.lp)-S.amp)*(1-Math.exp(-dt/2));
+    S.hist.push({t:now,s:S.lp});
+    while(S.hist.length&&now-S.hist[0].t>4000)S.hist.shift();
+    var h=S.hist,k=h.length;
+    if(k>=3){
+      var a=h[k-3],b=h[k-2],c=h[k-1];
+      if(b.s>a.s&&b.s>=c.s&&b.s>Math.max(0.6*S.amp,0.15)&&(!S.lastPeak||b.t-S.lastPeak>300)){
+        var den=a.s-2*b.s+c.s,off=den?0.5*(a.s-c.s)/den:0;
+        off=Math.max(-0.5,Math.min(0.5,off));
+        camBeat(b.t+off*((c.t-a.t)/2));
+      }
+    }
+    drawPpg();
+  }
+  function drawPpg(){
+    var c=$('ppgc');
+    if(c.style.display==='none')return;
+    var r=window.devicePixelRatio||1,w=c.clientWidth,h=c.clientHeight;
+    if(!w)return;
+    if(c.width!==Math.round(w*r)){c.width=Math.round(w*r);c.height=Math.round(h*r)}
+    var g=c.getContext('2d');g.setTransform(r,0,0,r,0,0);g.clearRect(0,0,w,h);
+    var hist=camS.hist;
+    if(hist.length<2)return;
+    var cs=getComputedStyle(document.documentElement),last=hist[hist.length-1].t,sc=(h/2-4)/Math.max(0.3,camS.amp*2.2);
+    g.strokeStyle=cs.getPropertyValue('--trace');g.lineWidth=2;g.beginPath();
+    hist.forEach(function(p,i){var x=w*(1-(last-p.t)/4000),y=h/2-p.s*sc;if(i)g.lineTo(x,y);else g.moveTo(x,y)});
+    g.stroke();
+  }
+
+  function setMode(m,fromBle){
+    mode=m;
+    $('mSim').setAttribute('aria-pressed',m==='sim');
+    $('mBle').setAttribute('aria-pressed',m==='ble');
+    $('mCam').setAttribute('aria-pressed',m==='cam');
+    if(m!=='cam')stopCam();
+    if(m!=='ble'&&bleDev&&bleDev.gatt&&bleDev.gatt.connected)bleDev.gatt.disconnect();
+    if(m==='sim'){startSim();setStatus('Source: simulated.')}
+    else{
+      stopSim();
+      if(m==='cam')startCam();
+      else if(!fromBle&&!(bleDev&&bleDev.gatt&&bleDev.gatt.connected))setStatus('Source: Bluetooth. Tap Connect strap.');
+    }
+    samples=[];rrs=[];toneStop();
+  }
+
+  $('mSim').onclick=function(){setMode('sim')};
+  $('mBle').onclick=function(){setMode('ble')};
+  $('mCam').onclick=function(){setMode('cam')};
+  $('connect').onclick=connectBle;
+  $('tone').onclick=function(){
+    toneOn=!toneOn;
+    if(toneOn){
+      if(!audioCtx){var AC=window.AudioContext||window.webkitAudioContext;audioCtx=new AC()}
+      if(audioCtx.state==='suspended')audioCtx.resume();
+      if(!osc){toneStart();setTimeout(function(){if(rrs.length<2||toneOn)toneStop()},300)}
+    }else{toneStop()}
+    $('tone').textContent='Tone: '+(toneOn?'on':'off');
+    $('tone').setAttribute('aria-pressed',toneOn);
+  };
+  $('rec').onclick=function(){
+    recording=!recording;
+    if(recording){log=['time,bpm,rr_ms,source'];$('rec').textContent='Stop recording'}
+    else{$('rec').textContent='Start recording'}
+  };
+  $('exp').onclick=function(){
+    var t=$('csv');
+    if(t.style.display==='block'){t.style.display='none';$('exp').textContent='Show CSV';return}
+    t.value=log.length?log.join('\n'):'No recording yet.';t.style.display='block';$('exp').textContent='Hide CSV';t.select();
+  };
+  // Voice pitch: microphone input, YIN-style autocorrelation, range about 30 to 4200 Hz (about B0 to C8)
+  var NAMES=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+  var micCtx=null,analyser=null,micBuf=null,micStream=null,micRaf=null,pitchHist=[],recentF=[],PITCH_WIN=10000,frameN=0;
+
+  function detectPitch(buf,sr){
+    var N=buf.length,half=N>>1,i,tau,rms=0;
+    for(i=0;i<N;i++)rms+=buf[i]*buf[i];
+    rms=Math.sqrt(rms/N);
+    lastDb=rms>0?20*Math.log10(rms):-120;lastClarity=0;
+    if(rms<0.01)return -1;
+    var tauMin=Math.max(2,Math.floor(sr/4200)),tauMax=Math.min(half-2,Math.floor(sr/30));
+    var cm=new Float32Array(tauMax+3),run=0,t=-1;
+    cm[0]=1;
+    for(tau=1;tau<=tauMax+1;tau++){
+      var s=0;for(i=0;i<half;i++){var x=buf[i]-buf[i+tau];s+=x*x}
+      run+=s;cm[tau]=run>0?s*tau/run:1;
+      if(t>0){if(cm[tau]<cm[t]){t=tau;continue}else break}
+      if(tau>=tauMin&&tau<=tauMax&&cm[tau]<0.15)t=tau;
+    }
+    if(t<0)return -1;
+    lastClarity=Math.max(0,1-cm[t]);
+    var a=cm[t-1],b=cm[t],c=cm[t+1],den=2*(a-2*b+c),shift=den?(a-c)/den:0;
+    if(!isFinite(shift)||Math.abs(shift)>1)shift=0;
+    return sr/(t+shift);
+  }
+
+  // Tone level follows voice match: match 100% (voice on middle C) gives a silent tone, 0% gives full level.
+  // MATCH_RANGE: cents of error at which match reaches 0. FOLD_OCTAVES: true counts any octave of C as a match.
+  var MATCH_RANGE=200,FOLD_OCTAVES=true,matchNode=null,matchLevel=0;
+  // Elimination sequence: a tone counts as eliminated when the voice holds a match of ELIM_MATCH or better for ELIM_HOLD ms.
+  // After ELIM_NEEDED eliminations the tone fades out, and FADE_WAIT ms later a new tone 1 or 2 semitones higher or lower begins.
+  var ELIM_NEEDED=3,ELIM_MATCH=0.85,ELIM_HOLD=1000,FADE_WAIT=1500,elimCount=0,holdStart=0,armed=true,phase='active';
+  function noteName(m){return NAMES[((m%12)+12)%12]+(Math.floor(m/12)-1)}
+  function showProgress(){
+    var el=$('vprog');
+    if(!listening()){el.textContent='';return}
+    el.textContent=phase==='fading'?'Tone eliminated. Next tone follows.':('Tone '+noteName(toneMidi)+': '+elimCount+' of '+ELIM_NEEDED+' eliminated.'+(rangeOk()?'':' Target is inside the cleared range, so it does not count.'));
+  }
+  function resetProg(){elimCount=0;holdStart=0;armed=true;showProgress()}
+  function setToneMidi(nm){$('tOct').value=Math.floor(nm/12)-1;$('tNote').value=((nm%12)+12)%12;applyTone()}
+  function nextTone(){
+    phase='fading';
+    clearedMin=Math.min(clearedMin,toneMidi);clearedMax=Math.max(clearedMax,toneMidi);
+    if(audioCtx&&matchNode)matchNode.gain.setTargetAtTime(0,audioCtx.currentTime,0.25);
+    toneStop();
+    showProgress();
+    setTimeout(function(){
+      var d=growDir;setToneMidi(nextTarget(d));growDir=-d;
+      elimCount=0;holdStart=0;armed=true;phase='active';
+      showProgress();
+    },FADE_WAIT);
+  }
+  // Three criteria: clarity of tone (periodicity of the voice, 0 to 100%), volume (level in dBFS), and range of pitch.
+  // Range of pitch is the expanding span of tones cleared with clarity. Each new target lies just outside the cleared range,
+  // alternating above and below, and a hold only counts while the target widens that range. Clarity and volume must hold throughout.
+  var CLARITY_MIN=0.9,VOL_MIN_DB=-35,VOL_MAX_DB=-6,lastDb=-120,lastClarity=0,clearedMin=1e9,clearedMax=-1e9,growDir=1;
+  function rangeOk(){return clearedMin>clearedMax||toneMidi<clearedMin||toneMidi>clearedMax}
+  function critOk(){return lastClarity>=CLARITY_MIN&&lastDb>=VOL_MIN_DB&&lastDb<=VOL_MAX_DB&&rangeOk()}
+  function nextTarget(dir){
+    var step=1+Math.floor(Math.random()*2),nm=dir>0?clearedMax+step:clearedMin-step;
+    if(nm>107||nm<24)nm=dir>0?clearedMin-step:clearedMax+step;
+    return Math.max(24,Math.min(107,nm));
+  }
+  function setCrit(id,val,label,ok){var el=$(id);el.querySelector('b').textContent=val;el.querySelector('span').textContent=label;el.className=ok?'met':''}
+  function updateCrit(){
+    setCrit('cClar',Math.round(lastClarity*100)+'%','Clarity, min '+Math.round(CLARITY_MIN*100)+'%',lastClarity>=CLARITY_MIN);
+    setCrit('cRange',clearedMin>clearedMax?'0 st':(clearedMax-clearedMin)+' st','Range cleared'+(clearedMin>clearedMax?'':', '+noteName(clearedMin)+' to '+noteName(clearedMax)),rangeOk());
+    setCrit('cVol',Math.round(lastDb)+' dB','Volume, '+VOL_MIN_DB+' to '+VOL_MAX_DB+' dB',lastDb>=VOL_MIN_DB&&lastDb<=VOL_MAX_DB);
+  }
+  function trackElim(m){
+    var now=Date.now();
+    if(m>=ELIM_MATCH&&critOk()){
+      if(!holdStart)holdStart=now;
+      if(armed&&now-holdStart>=ELIM_HOLD){
+        armed=false;elimCount++;
+        if(elimCount>=ELIM_NEEDED)nextTone();else showProgress();
+      }
+    }else{holdStart=0;if(m<0.5)armed=true}
+  }
+  function setMatch(m){
+    matchLevel=m;
+    if(phase==='active'){
+      if(audioCtx&&matchNode)matchNode.gain.setTargetAtTime(1-m,audioCtx.currentTime,0.08);
+      if(listening())trackElim(m);
+    }
+    $('vmatch').textContent=listening()?('Match: '+Math.round(m*100)+'%. Tone level: '+Math.round((phase==='active'?1-m:0)*100)+'%.'):'';
+  }
+
+  function median(a){var s=a.slice().sort(function(x,y){return x-y});return s[s.length>>1]}
+
+  function micLoop(){
+    micRaf=requestAnimationFrame(micLoop);
+    if(++frameN%3)return;
+    analyser.getFloatTimeDomainData(micBuf);
+    processPitch(detectPitch(micBuf,micCtx.sampleRate),Date.now());
+  }
+  function processPitch(f,now){
+    if(f>0){
+      recentF.push(f);if(recentF.length>5)recentF.shift();
+      var fm=median(recentF),midi=69+12*Math.log2(fm/440),n=Math.round(midi);
+      var cents=Math.round((midi-n)*100);
+      $('vnote').textContent=NAMES[((n%12)+12)%12]+(Math.floor(n/12)-1);
+      $('vhz').textContent=fm.toFixed(1)+' Hz';
+      $('vcent').textContent=(cents>0?'+':'')+cents+' cents';
+      pitchHist.push({t:now,m:midi});
+      var dc=(midi-toneMidi)*100;
+      if(FOLD_OCTAVES)dc=((dc%1200)+1800)%1200-600;
+      setMatch(Math.max(0,1-Math.abs(dc)/MATCH_RANGE));
+    }else{
+      recentF=[];setMatch(0);
+      $('vnote').textContent='--';$('vhz').textContent='-- Hz';$('vcent').textContent='';
+      pitchHist.push({t:now,m:null});
+    }
+    while(pitchHist.length&&now-pitchHist[0].t>PITCH_WIN)pitchHist.shift();
+    updateCrit();
+    drawPitch();
+  }
+
+  function drawPitch(){
+    var c=$('pchart'),r=window.devicePixelRatio||1,w=c.clientWidth,h=c.clientHeight;
+    if(!w)return;
+    if(c.width!==Math.round(w*r)){c.width=Math.round(w*r);c.height=Math.round(h*r)}
+    var g=c.getContext('2d');g.setTransform(r,0,0,r,0,0);g.clearRect(0,0,w,h);
+    var cs=getComputedStyle(document.documentElement);
+    var line=cs.getPropertyValue('--line'),trace=cs.getPropertyValue('--trace'),mute=cs.getPropertyValue('--mute'),acc=cs.getPropertyValue('--accent');
+    var ms=pitchHist.filter(function(p){return p.m!==null}).map(function(p){return p.m});
+    var lo=Math.min.apply(null,ms.concat([toneMidi-3]))-1,hi=Math.max.apply(null,ms.concat([toneMidi+7]))+1;
+    function Y(m){return 6+(h-12)*(1-(m-lo)/(hi-lo))}
+    g.font='11px sans-serif';g.lineWidth=1;g.fillStyle=mute;g.strokeStyle=line;
+    for(var m=Math.ceil(lo);m<=Math.floor(hi);m++){
+      if(m%12===0){g.beginPath();g.moveTo(40,Y(m));g.lineTo(w,Y(m));g.stroke();g.fillText('C'+(m/12-1),2,Y(m)+4)}
+    }
+    g.strokeStyle=acc;g.setLineDash([4,4]);g.beginPath();g.moveTo(40,Y(toneMidi));g.lineTo(w,Y(toneMidi));g.stroke();g.setLineDash([]);
+    g.fillStyle=acc;g.textAlign='right';g.fillText(NAMES[((toneMidi%12)+12)%12]+(Math.floor(toneMidi/12)-1)+' tone',w-2,Y(toneMidi)-3);g.textAlign='left';
+    var now=Date.now(),pen=false;
+    g.strokeStyle=trace;g.lineWidth=2;g.beginPath();
+    pitchHist.forEach(function(p){
+      if(p.m===null){pen=false;return}
+      var x=40+(w-40)*(1-(now-p.t)/PITCH_WIN),y=Y(p.m);
+      if(pen)g.lineTo(x,y);else{g.moveTo(x,y);pen=true}
+    });
+    g.stroke();
+  }
+
+  async function startMic(){
+    if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
+      $('vstat').textContent='Microphone access is unavailable here. Open the page directly in Chrome.';return;
+    }
+    try{
+      micStream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
+      var AC=window.AudioContext||window.webkitAudioContext;
+      micCtx=new AC();
+      if(micCtx.state==='suspended')await micCtx.resume();
+      var src=micCtx.createMediaStreamSource(micStream);
+      analyser=micCtx.createAnalyser();analyser.fftSize=4096;
+      micBuf=new Float32Array(analyser.fftSize);
+      src.connect(analyser); // not connected to the output, so no feedback
+      pitchHist=[];recentF=[];
+      $('mic').textContent='Stop microphone';
+      resetProg();
+      $('vstat').textContent='Listening. Sing or hum a steady note.';
+      micLoop();
+    }catch(err){
+      $('vstat').textContent='Microphone unavailable: '+(err&&err.message?err.message:err);
+    }
+  }
+  function stopMic(){
+    if(micRaf){cancelAnimationFrame(micRaf);micRaf=null}
+    if(micStream){micStream.getTracks().forEach(function(t){t.stop()});micStream=null}
+    if(micCtx){micCtx.close();micCtx=null}
+    $('mic').textContent='Start microphone';
+    $('vstat').textContent='Microphone off. Headphones are recommended so the tone is not picked up.';
+    $('vnote').textContent='--';$('vhz').textContent='-- Hz';$('vcent').textContent='';setMatch(0);
+  }
+  function applyTone(){
+    toneMidi=12*(+$('tOct').value+1)+(+$('tNote').value);
+    TONE_HZ=440*Math.pow(2,(toneMidi-69)/12);
+    if(osc&&audioCtx)osc.frequency.setValueAtTime(TONE_HZ,audioCtx.currentTime);
+    drawPitch();
+  }
+  $('tNote').onchange=function(){applyTone();resetProg()};$('tOct').onchange=function(){applyTone();resetProg()};
+  $('fold').onchange=function(){FOLD_OCTAVES=this.checked};
+  $('flip').onclick=function(){
+    if(clearedMin>clearedMax)return;
+    var wasUp=toneMidi>clearedMax;
+    setToneMidi(nextTarget(wasUp?-1:1));resetProg();
+  };
+  $('mic').onclick=function(){micStream?stopMic():startMic()};
+
+    // Mastery simulation: a simulated voice at set skill levels drives the same match, clarity, volume, and range logic.
+  // Values are illustrative, not measured human data. sd: pitch error in cents. conv: seconds to settle on a new tone.
+  // react: seconds before moving after a new tone. clar/vol: typical clarity and level (dB), with slow variation.
+  // drop: voice dropouts per second. limit: semitones the voice can reach either side of its starting tone.
+  var LEVELS=[
+    {name:'Novice',sd:45,conv:1.6,react:1.2,clar:0.85,clarSd:0.03,vol:-33,volSd:4,drop:0.5,limit:3},
+    {name:'Developing',sd:28,conv:1.0,react:0.8,clar:0.92,clarSd:0.02,vol:-26,volSd:3,drop:0.25,limit:6},
+    {name:'Proficient',sd:14,conv:0.5,react:0.5,clar:0.95,clarSd:0.015,vol:-21,volSd:2.5,drop:0.08,limit:10},
+    {name:'Expert',sd:6,conv:0.25,react:0.3,clar:0.98,clarSd:0.008,vol:-18,volSd:2,drop:0.02,limit:18}
+  ];
+  var simOn=false,simTimer=null,simIdx=0,simSpeed=10,simAll=false,simResults=[],sim=null,simSaved=null;
+  function listening(){return !!micStream||simOn}
+  function randn(){var u=0,v=Math.random();while(!u)u=Math.random();return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v)}
+  function simA(dt,tau){return 1-Math.exp(-dt/tau)}
+  function simOU(x,mean,sd,dt,tau){var a=simA(dt,tau);return x+a*(mean+Math.sqrt((2-a)/a)*sd*randn()-x)}
+
+  function simStart(idx){
+    simIdx=idx;var L=LEVELS[idx];
+    clearedMin=1e9;clearedMax=-1e9;growDir=1;phase='active';
+    $('tOct').value=4;$('tNote').value=0;applyTone();
+    simOn=true;resetProg();
+    sim={L:L,t:0,v:toneMidi,e:0,c:L.clar,db:L.vol,center:toneMidi,lastTone:toneMidi,reactUntil:0,releaseUntil:0,dropUntil:0,lastElim:0,lastProg:0,triedFlip:false,stages:0,wasFading:false,clarSum:0,clarN:0};
+    $('vstat').textContent='Simulated voice: '+L.name+', speed x'+simSpeed+'.';
+    if(simTimer)clearInterval(simTimer);
+    simTimer=setInterval(simTick,50);
+  }
+  function simTick(){
+    var S=sim,L=S.L,dt=0.05*simSpeed,now=Date.now();
+    S.t+=dt;
+    if(phase==='fading'){if(!S.wasFading){S.wasFading=true;S.stages++;S.lastProg=S.t}}else S.wasFading=false;
+    if(toneMidi!==S.lastTone){S.lastTone=toneMidi;S.reactUntil=S.t+L.react;S.lastProg=S.t;S.triedFlip=false}
+    if(elimCount>S.lastElim){S.releaseUntil=S.t+0.5;S.lastProg=S.t}
+    S.lastElim=elimCount;
+    var lo=S.center-L.limit,hi=S.center+L.limit,target=Math.max(lo,Math.min(hi,toneMidi));
+    if(S.t>=S.reactUntil)S.v+=(target-S.v)*simA(dt,L.conv);
+    S.e=simOU(S.e,0,L.sd,dt,0.6);
+    S.c=simOU(S.c,L.clar,L.clarSd,dt,1.5);
+    S.db=simOU(S.db,L.vol,L.volSd,dt,2);
+    if(Math.random()<1-Math.exp(-L.drop*dt))S.dropUntil=S.t+0.3;
+    recentF=[];
+    if(S.t<S.releaseUntil||S.t<S.dropUntil){
+      lastClarity=0;processPitch(-1,now);
+    }else{
+      var strain=(toneMidi>hi||toneMidi<lo)?0.12:0,moving=Math.min(0.12,Math.abs(target-S.v)*0.03);
+      lastClarity=Math.max(0,Math.min(1,S.c-strain-moving));lastDb=S.db;
+      S.clarSum+=lastClarity;S.clarN++;
+      processPitch(440*Math.pow(2,(S.v+S.e/100-69)/12),now);
+    }
+    if(phase==='active'&&S.t-S.lastProg>12){
+      if(!S.triedFlip){
+        var before=toneMidi;$('flip').click();
+        if(toneMidi!==before){S.lastTone=toneMidi;S.reactUntil=S.t+L.react}
+        S.triedFlip=true;S.lastProg=S.t;
+      }else{simFinish(clearedMin>clearedMax?'No tone cleared.':'Reached the limit of the voice on both sides.');return}
+    }
+    if(S.t>900)simFinish('Time limit.');
+  }
+  function simFinish(reason){
+    var S=sim,none=clearedMin>clearedMax;
+    simResults.push({name:S.L.name,stages:S.stages,span:none?0:clearedMax-clearedMin,lo:none?'':noteName(clearedMin),hi:none?'':noteName(clearedMax),t:Math.round(S.t),reason:reason,clar:S.clarN?S.clarSum/S.clarN:0});
+    renderSim();
+    if(simAll&&simIdx<LEVELS.length-1)simStart(simIdx+1);else simEnd();
+  }
+  function simEnd(){
+    if(simTimer){clearInterval(simTimer);simTimer=null}
+    if(simSaved){FOLD_OCTAVES=simSaved.fold;ELIM_HOLD=simSaved.hold;FADE_WAIT=simSaved.wait;$('fold').checked=FOLD_OCTAVES;simSaved=null}
+    simOn=false;recentF=[];
+    clearedMin=1e9;clearedMax=-1e9;growDir=1;phase='active';
+    setMatch(0);$('vprog').textContent='';
+    $('simRun').textContent='Run simulation';
+    $('vstat').textContent='Simulation finished. Microphone off.';
+  }
+  function renderSim(){
+    var h='';
+    simResults.forEach(function(r){
+      var w=Math.min(100,r.span/36*100);
+      h+='<div class="simrow"><b>'+r.name+'</b><div class="bar"><i style="width:'+w+'%"></i></div><span>Range cleared: '+r.span+' st'+(r.lo?' ('+r.lo+' to '+r.hi+')':'')+'. Tones cleared: '+r.stages+'. Average clarity: '+Math.round(r.clar*100)+'%. Simulated time: '+r.t+' s. '+r.reason+'</span></div>';
+    });
+    $('simOut').innerHTML=h;
+  }
+  $('simRun').onclick=function(){
+    if(simOn){simAll=false;simFinish('Stopped.');return}
+    if(micStream)stopMic();
+    var v=$('simLevel').value;simSpeed=+$('simSpeed').value;simAll=v==='all';simResults=[];renderSim();
+    simSaved={fold:FOLD_OCTAVES,hold:ELIM_HOLD,wait:FADE_WAIT};
+    FOLD_OCTAVES=false;$('fold').checked=false;ELIM_HOLD=1000/simSpeed;FADE_WAIT=1500/simSpeed;
+    $('simRun').textContent='Stop simulation';
+    simStart(simAll?0:+v);
+  };
+
+  window.addEventListener('resize',function(){draw();drawPitch()});
+  startSim();
+})();
+</script>
+</body>
+</html>
