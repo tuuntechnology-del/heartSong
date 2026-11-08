@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>heartSong2</title>
+<style>
+:root{color-scheme:dark}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:#000;color:#ddd;font:16px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;overflow:hidden}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+#start,#panel{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px;text-align:center;background:#000;z-index:5}
+#panel{display:none;background:rgba(0,0,0,.93)}
+h1{margin:0;font-size:28px;font-weight:600;color:#fff}
+p{margin:0;max-width:30em;color:#aaa}
+button,select{font:inherit;min-height:44px;padding:8px 18px;border-radius:10px;border:1px solid #444;background:#111;color:#fff}
+button.go{background:#fff;color:#000;font-weight:600;border-color:#fff}
+label{display:flex;gap:8px;align-items:center;color:#ccc}
+#hud{position:fixed;left:0;right:0;top:env(safe-area-inset-top,0px);padding:8px 14px;display:flex;justify-content:space-between;align-items:center;pointer-events:none;color:#999;font-size:14px;font-variant-numeric:tabular-nums;z-index:2}
+#gear{pointer-events:auto;min-width:44px;padding:0 10px;opacity:.45;border:0;background:transparent}
+#msg{position:fixed;left:16px;right:16px;bottom:calc(16px + env(safe-area-inset-bottom,0px));text-align:center;color:#8a8a8a;transition:opacity .6s;z-index:2}
+#err{color:#e88;min-height:1.4em}
+</style></head><body>
+<canvas id="cv"></canvas>
+<div id="hud"><span id="read"></span><button id="gear" aria-label="Settings">&#9881;</button></div>
+<div id="msg"></div>
+<div id="start"><h1>heartSong2</h1>
+<p>Match the tone with your voice. A pitch envelope shows where the voice is, and the tone becomes quieter as the pitch gets closer.</p>
+<p>Headphones are recommended, so the tone is not picked up by the microphone.</p>
+<button class="go" id="begin">Begin</button><div id="err"></div></div>
+<div id="panel"><h1>Settings</h1>
+<label>Tone <select id="tn"></select><select id="to"></select></label>
+<label><input type="checkbox" id="fold" checked> Match any octave</label>
+<label>Tone volume <input type="range" id="vol" min="5" max="100" value="30"></label>
+<button id="close">Close</button></div>
+<script>
+(function(){
+var $=function(i){return document.getElementById(i)};
+var NAMES=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+// Settings. Match: 1 at the tone's pitch, 0 at RANGE cents or more away; the tone level is (1 - match) times the volume.
+var S={toneMidi:60,fold:true,vol:0.3,win:12000,range:200,band:30};
+var ctx,an,buf,stream,osc,gain,hist=[],recent=[],lvl=1,last=0,cur=null,msgT=0;
+function hz(m){return 440*Math.pow(2,(m-69)/12)}
+function noteName(m){return NAMES[((m%12)+12)%12]+(Math.floor(m/12)-1)}
+// YIN pitch detector, 70 to 1200 Hz (as in heartSong v1)
+function detect(b,sr){
+  var N=b.length,h=N>>1,i,t,rms=0;
+  for(i=0;i<N;i++)rms+=b[i]*b[i];
+  if(Math.sqrt(rms/N)<0.01)return -1;
+  var lo=Math.max(2,Math.floor(sr/1200)),hi=Math.min(h-2,Math.floor(sr/70)),cm=new Float32Array(hi+3),run=0,p=-1;
+  cm[0]=1;
+  for(t=1;t<=hi+1;t++){
+    var s=0;for(i=0;i<h;i++){var x=b[i]-b[i+t];s+=x*x}
+    run+=s;cm[t]=run>0?s*t/run:1;
+    if(p>0){if(cm[t]<cm[p]){p=t;continue}else break}
+    if(t>=lo&&t<=hi&&cm[t]<0.15)p=t;
+  }
+  if(p<0)return -1;
+  var a=cm[p-1],c=cm[p],d=cm[p+1],den=2*(a-2*c+d),sh=den?(a-d)/den:0;
+  if(!isFinite(sh)||Math.abs(sh)>1)sh=0;
+  return sr/(p+sh);
+}
+function say(text,ms){var m=$('msg');m.textContent=text;m.style.opacity=1;clearTimeout(msgT);if(ms)msgT=setTimeout(function(){m.style.opacity=0},ms)}
+// One analysis step: pitch error in cents against the tone (folded to the nearest octave when that option is on).
+function feed(f,t){
+  var c=null,match=0;
+  if(f>0){
+    recent.push(f);if(recent.length>5)recent.shift();
+    var fm=recent.slice().sort(function(a,b){return a-b})[recent.length>>1];
+    c=(69+12*Math.log2(fm/440)-S.toneMidi)*100;
+    if(S.fold)c=((c%1200)+1800)%1200-600;
+    match=Math.max(0,1-Math.abs(c)/S.range);
+  }else recent=[];
+  cur=c;lvl=1-match;
+  hist.push({t:t,c:c});while(hist.length&&t-hist[0].t>S.win)hist.shift();
+  if(gain)gain.gain.setTargetAtTime(S.vol*lvl,ctx.currentTime,0.08);
+  $('read').textContent='Tone '+noteName(S.toneMidi)+(c===null?'':'   '+(c>0?'+':'')+Math.round(c)+' cents');
+}
+function frame(now){
+  requestAnimationFrame(frame);
+  if(now-last>=50){last=now;an.getFloatTimeDomainData(buf);feed(detect(buf,ctx.sampleRate),now)}
+  draw(now);
+}
+// Pitch envelope visualizer: time runs left to right (newest at the right), pitch error runs up (sharp) and down (flat).
+// The dashed centre line is the tone and dims as the tone quiets. The band is the match zone. The faint lines mark the error
+// at which the tone is back at full volume. The shaded envelope is the spread of the pitch over about 0.4 s around each moment.
+function draw(now){
+  var cv=$('cv'),d=window.devicePixelRatio||1,W=innerWidth,H=innerHeight;
+  if(cv.width!==Math.round(W*d)||cv.height!==Math.round(H*d)){cv.width=Math.round(W*d);cv.height=Math.round(H*d)}
+  var g=cv.getContext('2d');g.setTransform(d,0,0,d,0,0);g.fillStyle='#000';g.fillRect(0,0,W,H);
+  var mid=H/2,sc=H*0.42/600;
+  function X(t){return W*(1-(now-t)/S.win)}
+  function Y(c){return mid-Math.max(-600,Math.min(600,c))*sc}
+  g.fillStyle='rgba(255,255,255,0.07)';g.fillRect(0,Y(S.band),W,Y(-S.band)-Y(S.band));
+  g.strokeStyle='rgba(255,255,255,0.12)';g.lineWidth=1;
+  [S.range,-S.range].forEach(function(c){g.beginPath();g.moveTo(0,Y(c));g.lineTo(W,Y(c));g.stroke()});
+  g.strokeStyle='rgba(255,255,255,'+(0.25+0.6*lvl).toFixed(2)+')';g.lineWidth=2;g.setLineDash([8,8]);
+  g.beginPath();g.moveTo(0,mid);g.lineTo(W,mid);g.stroke();g.setLineDash([]);
+  var runs=[],run=[];
+  hist.forEach(function(p){
+    var prev=run[run.length-1];
+    if(p.c===null||(prev&&Math.abs(p.c-prev.c)>500)){if(run.length)runs.push(run);run=[]}
+    if(p.c!==null)run.push(p);
+  });
+  if(run.length)runs.push(run);
+  runs.forEach(function(r){
+    if(r.length<2)return;
+    var up=[],dn=[],i,j,k;
+    for(i=0;i<r.length;i++){
+      var mn=1e9,mx=-1e9;
+      for(j=Math.max(0,i-4);j<=Math.min(r.length-1,i+4);j++){mn=Math.min(mn,r[j].c);mx=Math.max(mx,r[j].c)}
+      up.push([X(r[i].t),Y(mx)]);dn.push([X(r[i].t),Y(mn)]);
+    }
+    g.fillStyle='rgba(255,255,255,0.16)';g.beginPath();
+    up.forEach(function(q,n){if(n)g.lineTo(q[0],q[1]);else g.moveTo(q[0],q[1])});
+    for(k=dn.length-1;k>=0;k--)g.lineTo(dn[k][0],dn[k][1]);
+    g.closePath();g.fill();
+    g.strokeStyle='#fff';g.lineWidth=3;g.lineJoin='round';g.shadowColor='rgba(255,255,255,0.6)';g.shadowBlur=6;g.beginPath();
+    r.forEach(function(p,n){if(n)g.lineTo(X(p.t),Y(p.c));else g.moveTo(X(p.t),Y(p.c))});
+    g.stroke();g.shadowBlur=0;
+  });
+  var l=hist[hist.length-1];
+  if(l&&l.c!==null){g.fillStyle='#fff';g.shadowColor='rgba(255,255,255,0.6)';g.shadowBlur=6;g.beginPath();g.arc(X(l.t),Y(l.c),6,0,6.2832);g.fill();g.shadowBlur=0}
+}
+async function begin(){
+  try{stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}})}
+  catch(e){$('err').textContent='Microphone unavailable: '+(e&&e.message?e.message:e);return}
+  var AC=window.AudioContext||window.webkitAudioContext;ctx=new AC();await ctx.resume();
+  an=ctx.createAnalyser();an.fftSize=4096;buf=new Float32Array(4096);ctx.createMediaStreamSource(stream).connect(an);
+  osc=ctx.createOscillator();osc.type='sine';osc.frequency.value=hz(S.toneMidi);
+  gain=ctx.createGain();gain.gain.value=0;osc.connect(gain);gain.connect(ctx.destination);osc.start();
+  gain.gain.setTargetAtTime(S.vol,ctx.currentTime,0.3);
+  $('start').style.display='none';
+  say('Match the tone with your voice. The tone becomes quieter as the pitch gets closer.',15000);
+  requestAnimationFrame(frame);
+}
+// Settings
+NAMES.forEach(function(n,i){$('tn').add(new Option(n,i))});
+for(var o=1;o<=7;o++)$('to').add(new Option(o,o,false,o===4));
+function setTone(){
+  S.toneMidi=12*(+$('to').value+1)+(+$('tn').value);
+  if(osc)osc.frequency.setTargetAtTime(hz(S.toneMidi),ctx.currentTime,0.05);
+}
+$('tn').onchange=setTone;$('to').onchange=setTone;
+$('fold').onchange=function(){S.fold=this.checked};
+$('vol').oninput=function(){S.vol=this.value/100};
+$('gear').onclick=function(){$('panel').style.display='flex'};
+$('close').onclick=function(){$('panel').style.display='none'};
+$('begin').onclick=begin;
+window.heartSong2={feed:feed,state:function(){return {lvl:lvl,cur:cur,tone:S.toneMidi}}};
+})();
+</script></body></html>
