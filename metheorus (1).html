@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>metheorus</title>
+<style>
+:root{color-scheme:dark}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;background:#000;color:#ddd;font:16px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;overflow:hidden}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+#start,#panel{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px;text-align:center;background:#000;z-index:5}
+#panel{display:none;background:rgba(0,0,0,.93);overflow-y:auto;justify-content:flex-start}
+h1{margin:0;font-size:28px;font-weight:600;color:#fff}
+p{margin:0;max-width:30em;color:#aaa}
+button,select{font:inherit;min-height:44px;padding:8px 18px;border-radius:10px;border:1px solid #444;background:#111;color:#fff}
+button.go{background:#fff;color:#000;font-weight:600;border-color:#fff}
+label{display:flex;gap:8px;align-items:center;color:#ccc}
+#hud{position:fixed;left:0;right:0;top:env(safe-area-inset-top,0px);padding:8px 14px;display:flex;justify-content:space-between;align-items:center;pointer-events:none;color:#999;font-size:14px;font-variant-numeric:tabular-nums;z-index:2}
+#gear{pointer-events:auto;min-width:44px;padding:0 10px;opacity:.45;border:0;background:transparent}
+#msg{position:fixed;left:16px;right:16px;bottom:calc(16px + env(safe-area-inset-bottom,0px));text-align:center;color:#8a8a8a;transition:opacity .6s;z-index:2}
+#err{color:#e88;min-height:1.4em}
+</style></head><body>
+<canvas id="cv"></canvas>
+<div id="hud"><span id="read"></span><span id="heart"></span><button id="gear" aria-label="Settings">&#9881;</button></div>
+<div id="msg"></div>
+<div id="start"><h1>metheorus</h1>
+<p>Match the tone with your voice. A pitch envelope shows where the voice is, and the tone becomes quieter as the pitch gets closer.</p>
+<p>Heart-rate tracking starts on Begin. Once the HRV wave is steady, a vibration cue fades in as the R-R interval shortens or holds, and out as it lengthens.</p>
+<p>Headphones are recommended, so the tone is not picked up by the microphone.</p>
+<div id="last" style="color:#8a8a8a;font-size:14px;white-space:pre-line"></div>
+<label>Heart rhythm <select id="src"><option value="ble">Heart-rate strap (Bluetooth)</option><option value="sim">Simulated heartbeat (test)</option></select></label>
+<button class="go" id="begin">Begin</button><div id="err"></div></div>
+<div id="panel"><h1>Settings</h1>
+<label>Tone <select id="tn"></select><select id="to"></select></label>
+<label><input type="checkbox" id="fold" checked> Match any octave</label>
+<label>Tone volume <input type="range" id="vol" min="5" max="100" value="30"></label>
+<label><input type="checkbox" id="hap" checked> Vibration cue</label>
+<div id="prog" style="max-width:34em;font-size:14px;color:#aaa;text-align:left;white-space:pre-line"></div>
+<div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center"><button id="exp">Export progress</button><button id="imp">Import</button><button id="clr">Clear</button></div>
+<input type="file" id="impf" accept="application/json,.json" hidden><div id="pmsg" style="color:#8c8;min-height:1.4em"></div>
+<button id="close">Close</button></div>
+<script>
+/* metheorus: the first phase of heartSong, as a stand-alone module (one file, no dependencies).
+   Contents: a steady tone that quiets as the voice matches its pitch, a pitch envelope visualizer, R-R interval tracking
+   (Bluetooth strap or simulated heartbeat), HRV wave detection, and a vibration cue.
+   Hooks for a host page: window.metheorus.on('steady', fn) runs fn when the HRV wave has held steady and the vibration cue begins;
+   window.metheorus.state() returns the current tone level, pitch error (cents), and heart-rhythm status. */
+(function(){
+var $=function(i){return document.getElementById(i)};
+var listeners={};
+function emit(n,d){(listeners[n]||[]).forEach(function(f){try{f(d)}catch(e){}})}
+var NAMES=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+// Settings. Match: 1 at the tone's pitch, 0 at RANGE cents or more away; the tone level is (1 - match) times the volume.
+var S={toneMidi:60,fold:true,vol:0.3,win:12000,range:200,band:30,haptics:true};
+var lastDb=-120,lastClar=0,ctx,an,buf,stream,osc,gain,hist=[],recent=[],lvl=1,last=0,cur=null,msgT=0;
+function hz(m){return 440*Math.pow(2,(m-69)/12)}
+function noteName(m){return NAMES[((m%12)+12)%12]+(Math.floor(m/12)-1)}
+// YIN pitch detector, 70 to 1200 Hz (as in heartSong v1)
+function detect(b,sr){
+  var N=b.length,h=N>>1,i,t,rms=0;
+  for(i=0;i<N;i++)rms+=b[i]*b[i];
+  var r0=Math.sqrt(rms/N);lastDb=r0>0?20*Math.log10(r0):-120;lastClar=0;
+  if(r0<0.01)return -1;
+  var lo=Math.max(2,Math.floor(sr/1200)),hi=Math.min(h-2,Math.floor(sr/70)),cm=new Float32Array(hi+3),run=0,p=-1;
+  cm[0]=1;
+  for(t=1;t<=hi+1;t++){
+    var s=0;for(i=0;i<h;i++){var x=b[i]-b[i+t];s+=x*x}
+    run+=s;cm[t]=run>0?s*t/run:1;
+    if(p>0){if(cm[t]<cm[p]){p=t;continue}else break}
+    if(t>=lo&&t<=hi&&cm[t]<0.15)p=t;
+  }
+  if(p<0)return -1;
+  lastClar=Math.max(0,1-cm[p]);
+  var a=cm[p-1],c=cm[p],d=cm[p+1],den=2*(a-2*c+d),sh=den?(a-d)/den:0;
+  if(!isFinite(sh)||Math.abs(sh)>1)sh=0;
+  return sr/(p+sh);
+}
+function say(text,ms){var m=$('msg');m.textContent=text;m.style.opacity=1;clearTimeout(msgT);if(ms)msgT=setTimeout(function(){m.style.opacity=0},ms)}
+// One analysis step: pitch error in cents against the tone (folded to the nearest octave when that option is on).
+function feed(f,t){
+  var c=null,match=0;
+  if(f>0){
+    recent.push(f);if(recent.length>5)recent.shift();
+    var fm=recent.slice().sort(function(a,b){return a-b})[recent.length>>1];
+    c=(69+12*Math.log2(fm/440)-S.toneMidi)*100;
+    if(S.fold)c=((c%1200)+1800)%1200-600;
+    match=Math.max(0,1-Math.abs(c)/S.range);
+  }else recent=[];
+  if(cs&&c!==null){cs.n++;cs.sumErr+=Math.abs(c);if(Math.abs(c)<=S.band)cs.within++}
+  cur=c;lvl=1-match;
+  hist.push({t:t,c:c});while(hist.length&&t-hist[0].t>S.win)hist.shift();
+  breathFrame(t,c!==null,c);
+  emit('frame',{t:t,cents:c,voiced:c!==null,match:match,clarity:c===null?0:lastClar,db:lastDb});
+  if(gain)gain.gain.setTargetAtTime(S.vol*lvl,ctx.currentTime,0.08);
+  $('read').textContent='Tone '+noteName(S.toneMidi)+(c===null?'':'   '+(c>0?'+':'')+Math.round(c)+' cents');
+}
+function frame(now){
+  requestAnimationFrame(frame);
+  if(now-last>=50){last=now;an.getFloatTimeDomainData(buf);feed(detect(buf,ctx.sampleRate),now)}
+  draw(now);
+}
+// Pitch envelope visualizer: time runs left to right (newest at the right), pitch error runs up (sharp) and down (flat).
+// The dashed centre line is the tone and dims as the tone quiets. The band is the match zone. The faint lines mark the error
+// at which the tone is back at full volume. The shaded envelope is the spread of the pitch over about 0.4 s around each moment.
+function draw(now){
+  var cv=$('cv'),d=window.devicePixelRatio||1,W=innerWidth,H=innerHeight;
+  if(cv.width!==Math.round(W*d)||cv.height!==Math.round(H*d)){cv.width=Math.round(W*d);cv.height=Math.round(H*d)}
+  var g=cv.getContext('2d');g.setTransform(d,0,0,d,0,0);g.fillStyle='#000';g.fillRect(0,0,W,H);
+  var mid=H/2,sc=H*0.42/600;
+  function X(t){return W*(1-(now-t)/S.win)}
+  function Y(c){return mid-Math.max(-600,Math.min(600,c))*sc}
+  g.fillStyle='rgba(255,255,255,0.07)';g.fillRect(0,Y(S.band),W,Y(-S.band)-Y(S.band));
+  g.strokeStyle='rgba(255,255,255,0.12)';g.lineWidth=1;
+  [S.range,-S.range].forEach(function(c){g.beginPath();g.moveTo(0,Y(c));g.lineTo(W,Y(c));g.stroke()});
+  g.strokeStyle='rgba(255,255,255,'+(0.25+0.6*lvl).toFixed(2)+')';g.lineWidth=2;g.setLineDash([8,8]);
+  g.beginPath();g.moveTo(0,mid);g.lineTo(W,mid);g.stroke();g.setLineDash([]);
+  var runs=[],run=[];
+  hist.forEach(function(p){
+    var prev=run[run.length-1];
+    if(p.c===null||(prev&&Math.abs(p.c-prev.c)>500)){if(run.length)runs.push(run);run=[]}
+    if(p.c!==null)run.push(p);
+  });
+  if(run.length)runs.push(run);
+  runs.forEach(function(r){
+    if(r.length<2)return;
+    var up=[],dn=[],i,j,k;
+    for(i=0;i<r.length;i++){
+      var mn=1e9,mx=-1e9;
+      for(j=Math.max(0,i-4);j<=Math.min(r.length-1,i+4);j++){mn=Math.min(mn,r[j].c);mx=Math.max(mx,r[j].c)}
+      up.push([X(r[i].t),Y(mx)]);dn.push([X(r[i].t),Y(mn)]);
+    }
+    g.fillStyle='rgba(255,255,255,0.16)';g.beginPath();
+    up.forEach(function(q,n){if(n)g.lineTo(q[0],q[1]);else g.moveTo(q[0],q[1])});
+    for(k=dn.length-1;k>=0;k--)g.lineTo(dn[k][0],dn[k][1]);
+    g.closePath();g.fill();
+    g.strokeStyle='#fff';g.lineWidth=3;g.lineJoin='round';g.shadowColor='rgba(255,255,255,0.6)';g.shadowBlur=6;g.beginPath();
+    r.forEach(function(p,n){if(n)g.lineTo(X(p.t),Y(p.c));else g.moveTo(X(p.t),Y(p.c))});
+    g.stroke();g.shadowBlur=0;
+  });
+  var l=hist[hist.length-1];
+  if(l&&l.c!==null){g.fillStyle='#fff';g.shadowColor='rgba(255,255,255,0.6)';g.shadowBlur=6;g.beginPath();g.arc(X(l.t),Y(l.c),6,0,6.2832);g.fill();g.shadowBlur=0}
+}
+// Heart rhythm. R-R intervals come from a Bluetooth strap (heart rate profile) or a simulated heartbeat. When the R-R series shows
+// a steady sinusoid (HRV wave: at least 60% of the 0.05 to 0.40 Hz power in one peak, at least 20 ms, held 10 s), the vibration cue
+// begins. It fades in as R-R shortens, holds while R-R stays the same (within 10 ms), and fades out as R-R lengthens.
+// Vibration has no strength control on the web, so strength is emulated by pulse width (about 0 to 90 ms in each 100 ms).
+var rrHist=[],hapOn=false,since=0,lastChk=0,trend=0,lastBeat=0,hap=0,lastStep=0,vibOn=false;
+function pushRR(v,t){
+  t=t||performance.now();
+  var p=rrHist.length?rrHist[rrHist.length-1].v:null;
+  rrHist.push({t:t,v:v});while(rrHist.length&&t-rrHist[0].t>200000)rrHist.shift();
+  trend=(p!==null&&v>p+10)?1:0;lastBeat=t;
+  emit('beat',{t:t,rr:v,lengthening:!!trend});
+}
+function hrvAnalyze(){
+  var a=rrHist;
+  if(a.length<30||a[a.length-1].t-a[0].t<40000)return null;
+  var fs=4,t1=a[a.length-1].t,t0=Math.max(a[0].t,t1-60000),N=Math.floor((t1-t0)/1000*fs),n,j=0;
+  if(N<fs*30)return null;
+  var x=new Float64Array(N);
+  for(n=0;n<N;n++){
+    var t=t0+n*1000/fs;
+    while(j<a.length-2&&a[j+1].t<t)j++;
+    var u=Math.max(0,Math.min(1,(t-a[j].t)/((a[j+1].t-a[j].t)||1)));
+    x[n]=a[j].v+(a[j+1].v-a[j].v)*u;
+  }
+  var sx=0,sy=0,sxx=0,sxy=0;
+  for(n=0;n<N;n++){sx+=n;sy+=x[n];sxx+=n*n;sxy+=n*x[n]}
+  var sl=(N*sxy-sx*sy)/(N*sxx-sx*sx),ic=(sy-sl*sx)/N,ws=0;
+  for(n=0;n<N;n++){var w=0.5-0.5*Math.cos(2*Math.PI*n/(N-1));x[n]=(x[n]-(ic+sl*n))*w;ws+=w}
+  var fr=[],pw=[],tot=0,best=0,bi=0;
+  for(var f=0.05;f<=0.4001;f+=0.005){
+    var re=0,im=0,om=2*Math.PI*f/fs;
+    for(n=0;n<N;n++){re+=x[n]*Math.cos(om*n);im-=x[n]*Math.sin(om*n)}
+    var pp=re*re+im*im;fr.push(f);pw.push(pp);tot+=pp;if(pp>best){best=pp;bi=fr.length-1}
+  }
+  var pk=0;
+  for(var i=0;i<fr.length;i++)if(Math.abs(fr[i]-fr[bi])<=0.0301)pk+=pw[i];
+  return {coh:tot>0?pk/tot:0,amp:2*Math.sqrt(best)/ws,f:fr[bi]};
+}
+var hstate='baseline',sineStart=0,sineF=0.1,fired6=false,fired9=false;
+function setState(st){if(st!==hstate){hstate=st;emit('state',{state:st})}}
+function hrvCheck(now){
+  var r=hrvAnalyze(),h=$('heart');
+  if(!r){since=0;sineStart=0;setState('baseline');h.textContent='Heart: '+rrHist.length+' beats'+breathShort();return}
+  var ok=r.coh>=0.6&&r.amp>=20;
+  if(cs){cs.coh=+r.coh.toFixed(2);cs.amp=Math.round(r.amp)}
+  if(!ok){since=0;sineStart=0}else{if(!since){since=now;sineStart=now}sineF=r.f}
+  setState(ok?(now-since>=10000?'coherent':'building'):'baseline');
+  if(ok&&!hapOn&&now-since>=10000){hapOn=true;if(cs)cs.steadyAt=Math.round((now-cs.t0)/1000);say('Vibration cue on.',4000);emit('steady',r)}
+  if(ok&&!fired6&&(now-sineStart)/1000*sineF>=6){fired6=true;emit('sine6',{f:sineF})}
+  h.textContent=(hapOn?'Heart: HRV wave steady, vibration on':ok?'Heart: HRV wave forming':'Heart: '+Math.round(r.coh*100)+'% coherence')+breathShort();
+}
+function step(now){
+  if(now-lastChk>=1000){lastChk=now;hrvCheck(now)}
+  tickSession(now);
+  var dt=lastStep?Math.min(0.5,(now-lastStep)/1000):0.1;lastStep=now;
+  var tgt=(hapOn&&S.haptics&&now-lastBeat<3000&&!trend)?1:0;
+  hap+=(tgt-hap)*(1-Math.exp(-dt/0.5));
+  var on=hap<0.12?0:Math.round(hap*90);
+  if(navigator.vibrate){if(on>0){navigator.vibrate(on);vibOn=true}else if(vibOn){navigator.vibrate(0);vibOn=false}}
+}
+function simHeart(){
+  var t0=performance.now();
+  (function beat(){
+    var tt=(performance.now()-t0)/1000,k=Math.min(1,tt/40),amp=6+84*k*k*(3-2*k),noise=40*(1-k)+3;
+    var rr=857+amp*Math.sin(2*Math.PI*tt/10)+(Math.random()-0.5)*2*noise;
+    pushRR(rr);setTimeout(beat,rr);
+  })();
+}
+async function connectBle(){
+  var dev=await navigator.bluetooth.requestDevice({filters:[{services:['heart_rate']}]});
+  var srv=await dev.gatt.connect(),svc=await srv.getPrimaryService('heart_rate'),ch=await svc.getCharacteristic('heart_rate_measurement');
+  ch.addEventListener('characteristicvaluechanged',function(e){
+    var dv=e.target.value,f=dv.getUint8(0),o=(f&1)?3:2;
+    if(f&8)o+=2;
+    if(f&16)while(o+1<dv.byteLength){pushRR(dv.getUint16(o,true)/1024*1000);o+=2}
+  });
+  dev.addEventListener('gattserverdisconnected',function(){say('Heart-rate strap disconnected.',0)});
+  await ch.startNotifications();
+}
+async function begin(){
+  if(!window.isSecureContext){$('err').textContent='This page was opened from a file or an insecure address, so the browser blocks the microphone and Bluetooth. Open it from an https address or from localhost.';return}
+  var src=$('src').value;
+  if(src==='ble'){
+    if(!navigator.bluetooth){$('err').textContent='Bluetooth is unavailable here. Use Chrome on Android, or choose the simulated heartbeat.';return}
+    try{await connectBle()}catch(e){$('err').textContent='Heart-rate strap not connected: '+(e&&e.message?e.message:e);return}
+  }else simHeart();
+  setInterval(function(){step(performance.now())},100);
+  startSession(performance.now());
+  try{stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}})}
+  catch(e){$('err').textContent='Microphone unavailable: '+(e&&e.message?e.message:e);return}
+  var AC=window.AudioContext||window.webkitAudioContext;ctx=new AC();await ctx.resume();
+  an=ctx.createAnalyser();an.fftSize=4096;buf=new Float32Array(4096);ctx.createMediaStreamSource(stream).connect(an);
+  osc=ctx.createOscillator();osc.type='sine';osc.frequency.value=hz(S.toneMidi);
+  gain=ctx.createGain();gain.gain.value=0;osc.connect(gain);gain.connect(ctx.destination);osc.start();
+  gain.gain.setTargetAtTime(S.vol,ctx.currentTime,0.3);
+  $('start').style.display='none';
+  say('Match the tone with your voice. The tone becomes quieter as the pitch gets closer.',15000);
+  requestAnimationFrame(frame);
+}
+// Progress. Settings and a summary of every session are kept in this browser (localStorage) for this web address, so the next
+// session starts where the last one left off. A session record holds its length, how well the pitch matched while voiced, and
+// when (if at all) the HRV wave became steady. Records are saved every 10 s and when the page is hidden. Export writes a
+// backup file, and Import merges one back in (for a new browser, a new device, or after the data is cleared).
+var KEY='metheorus:v1',store={settings:null,sessions:[]},cs=null,csT=0;
+function load(){try{var j=localStorage.getItem(KEY);if(j){var o=JSON.parse(j);if(o&&Array.isArray(o.sessions))store=o}}catch(e){}}
+function save(){try{localStorage.setItem(KEY,JSON.stringify(store));return true}catch(e){return false}}
+function persist(){store.settings={toneMidi:S.toneMidi,fold:S.fold,vol:S.vol,haptics:S.haptics};save()}
+function startSession(now){
+  fired6=false;fired9=false;consRun=0;breaths=[];bInfo=null;breathN=0;bIn=false;
+  cs={id:Date.now(),start:new Date().toISOString(),t0:now,dur:0,n:0,sumErr:0,within:0,steadyAt:null,coh:null,amp:null,beats:0};
+  store.sessions.push(cs);if(store.sessions.length>100)store.sessions.shift();csT=now;persist();
+}
+function tickSession(now){
+  if(!cs)return;
+  cs.dur=Math.round((now-cs.t0)/1000);cs.beats=rrHist.length;
+  if(now-csT>=10000){csT=now;persist()}
+}
+function fmtDur(s){return Math.floor(s/60)+' min '+(s%60)+' s'}
+function summary(x){
+  var d=new Date(x.start).toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+  return d+' \u00b7 '+fmtDur(x.dur)+(x.n?' \u00b7 within '+S.band+' cents for '+Math.round(100*x.within/x.n)+'% of voiced time (mean error '+Math.round(x.sumErr/x.n)+' cents)':' \u00b7 no voice')+(x.steadyAt!==null?' \u00b7 HRV wave steady at '+x.steadyAt+' s':' \u00b7 HRV wave not steady')+(x.br&&x.br.length?' \u00b7 '+x.br.length+' breaths'+(x.cons!=null?', consistency '+Math.round(x.cons*100)+'%':''):'');
+}
+function renderProg(){
+  var ss=store.sessions,out='Sessions saved: '+ss.length+'.';
+  ss.slice(-5).reverse().forEach(function(x){out+='\n'+summary(x)});
+  $('prog').textContent=out;
+}
+function renderLast(){
+  var ss=store.sessions,x=ss[ss.length-1];
+  $('last').textContent=x?'Last session: '+summary(x)+'\nSettings from the last session are restored.':'';
+}
+load();
+// Breaths. A breath is one voiced outbreath (at least BREATH_MIN s; gaps under BREATH_GAP s are bridged). When it ends, a record is made
+// (duration, pitch error and steadiness, clarity, loudness and its steadiness, heart-rhythm state, consistency) and the 'breath' event
+// fires. Breath-to-breath consistency, as in the first prototype: for each breath cycle (onset to next onset) the app finds when the
+// smoothed R-R interval peaks, takes how long after the end of the voiced outbreath that was as a phase of the cycle, and scores how
+// tightly those phases cluster over the last 5 breaths (no target phase assumed), multiplied by how steady the cycle length is.
+// 'resonant9' fires once CONS_CYCLES consecutive cycles score at least BREATH_SCORE_MIN while the HRV wave is steady.
+var breaths=[],bIn=false,bT0=0,bLast=0,bAcc=null,bInfo=null,BREATH_MIN=1.2,BREATH_GAP=0.4,BREATH_SCORE_MIN=0.7,CONS_CYCLES=9,consRun=0,breathN=0;
+function mean(a){var m=0,i;for(i=0;i<a.length;i++)m+=a[i];return a.length?m/a.length:0}
+function sdev(a){var m=mean(a),v=0,i;for(i=0;i<a.length;i++)v+=(a[i]-m)*(a[i]-m);return a.length?Math.sqrt(v/a.length):0}
+function breathFrame(now,voiced,c){
+  if(voiced){
+    if(!bIn){bIn=true;bT0=now;bAcc={c:[],cl:[],db:[]}}
+    bLast=now;bAcc.c.push(c);bAcc.cl.push(lastClar);bAcc.db.push(lastDb);
+  }else if(bIn&&now-bLast>BREATH_GAP*1000){
+    bIn=false;
+    if(bLast-bT0>=BREATH_MIN*1000)endBreath();
+  }
+}
+function endBreath(){
+  var a=bAcc,rec={n:++breathN,t0:bT0,t1:bLast,dur:(bLast-bT0)/1000,errMean:mean(a.c.map(function(x){return Math.abs(x)})),pitchSd:sdev(a.c),clarity:mean(a.cl),loudDb:mean(a.db),loudSd:sdev(a.db),state:hstate,cons:null};
+  breaths.push({t0:bT0,t1:bLast});if(breaths.length>12)breaths.shift();
+  breathEval();
+  rec.cons=bInfo&&bInfo.ok?bInfo.score:null;
+  if(cs){
+    cs.br=cs.br||[];
+    if(cs.br.length<150)cs.br.push([Math.round(rec.t0-cs.t0),+rec.dur.toFixed(1),Math.round(rec.errMean),Math.round(rec.pitchSd),+rec.clarity.toFixed(2),Math.round(rec.loudDb),+rec.loudSd.toFixed(1),rec.state,rec.cons===null?null:+rec.cons.toFixed(2)]);
+  }
+  emit('breath',rec);
+}
+function rrPeak(t0,t1){
+  var pts=rrHist.filter(function(p){return p.t>=t0-800&&p.t<=t1+800}),best=-1,bt=0,i,j;
+  if(pts.length<4)return null;
+  for(i=0;i<pts.length;i++){
+    if(pts[i].t<t0||pts[i].t>t1)continue;
+    var sum=0,n=0;
+    for(j=0;j<pts.length;j++)if(Math.abs(pts[j].t-pts[i].t)<=750){sum+=pts[j].v;n++}
+    if(sum/n>best){best=sum/n;bt=pts[i].t}
+  }
+  return best<0?null:bt;
+}
+function breathEval(){
+  var b=breaths,res=[],i;
+  for(i=1;i<b.length;i++){
+    var T=(b[i].t0-b[i-1].t0)/1000;
+    if(T<3||T>20)continue;
+    var pk=rrPeak(b[i].t0,b[i].t0+T*1000);
+    if(pk===null)continue;
+    var d=(pk-b[i].t1)/1000;
+    res.push({T:T,d:d,ph:2*Math.PI*d/T});
+  }
+  var r=res.slice(-5);
+  if(!r.length){bInfo=null;consRun=0;return}
+  var last=r[r.length-1];
+  if(r.length<4){bInfo={ok:false,n:r.length,lastD:last.d};consRun=0;return}
+  var cs2=0,sn=0,Ts=[];
+  r.forEach(function(x){cs2+=Math.cos(x.ph);sn+=Math.sin(x.ph);Ts.push(x.T)});
+  var mT=mean(Ts),timing=Math.sqrt(cs2*cs2+sn*sn)/r.length,rate=Math.max(0,1-(sdev(Ts)/mT)/0.25);
+  bInfo={ok:true,n:r.length,timing:timing,rate:rate,score:timing*rate,perMin:60/mT,lastD:last.d};
+  consRun=(bInfo.score>=BREATH_SCORE_MIN&&since>0)?consRun+1:0;
+  if(cs)cs.cons=+bInfo.score.toFixed(2);
+  emit('consistency',{score:bInfo.score,timing:timing,rate:rate,perMin:bInfo.perMin,run:consRun});
+  if(consRun>=CONS_CYCLES&&!fired9){fired9=true;emit('resonant9',{cycles:consRun})}
+}
+function breathShort(){
+  return bInfo&&bInfo.ok?' \u00b7 breath consistency '+Math.round(bInfo.score*100)+'% ('+consRun+' of '+CONS_CYCLES+')':(breaths.length?' \u00b7 breaths '+breathN:'');
+}
+// Settings
+NAMES.forEach(function(n,i){$('tn').add(new Option(n,i))});
+for(var o=1;o<=7;o++)$('to').add(new Option(o,o,false,o===4));
+function setTone(){
+  S.toneMidi=12*(+$('to').value+1)+(+$('tn').value);
+  if(osc)osc.frequency.setTargetAtTime(hz(S.toneMidi),ctx.currentTime,0.05);
+  persist();
+}
+(function(){
+  var st=store.settings;if(!st)return;
+  if(typeof st.toneMidi==='number'&&st.toneMidi>=24&&st.toneMidi<=107){S.toneMidi=st.toneMidi;$('tn').value=((st.toneMidi%12)+12)%12;$('to').value=Math.floor(st.toneMidi/12)-1}
+  S.fold=st.fold!==false;$('fold').checked=S.fold;
+  if(st.vol>0&&st.vol<=1){S.vol=st.vol;$('vol').value=Math.round(st.vol*100)}
+  S.haptics=st.haptics!==false;$('hap').checked=S.haptics;
+})();
+renderLast();
+$('exp').onclick=function(){
+  var b=new Blob([JSON.stringify(store,null,1)],{type:'application/json'}),a=document.createElement('a');
+  a.href=URL.createObjectURL(b);a.download='metheorus-progress.json';document.body.appendChild(a);a.click();a.remove();
+  $('pmsg').textContent='Progress file saved (check Downloads).';
+};
+$('imp').onclick=function(){$('impf').click()};
+$('impf').onchange=function(){
+  var f=this.files[0];if(!f)return;var r=new FileReader();
+  r.onload=function(){
+    try{
+      var o=JSON.parse(r.result);
+      if(!o||!Array.isArray(o.sessions)){$('pmsg').textContent='That file is not a metheorus progress file.';return}
+      var ids={};store.sessions.forEach(function(x){ids[x.id]=1});
+      o.sessions.forEach(function(x){if(x&&x.id&&!ids[x.id])store.sessions.push(x)});
+      store.sessions.sort(function(a,b){return a.id-b.id});
+      if(o.settings&&!store.settings)store.settings=o.settings;
+      save();renderProg();renderLast();$('pmsg').textContent='Progress imported.';
+    }catch(e){$('pmsg').textContent='That file could not be read.'}
+  };
+  r.readAsText(f);this.value='';
+};
+$('clr').onclick=function(){
+  if(confirm('Delete all saved progress on this device?')){store={settings:store.settings,sessions:[]};save();renderProg();renderLast();$('pmsg').textContent='Progress cleared.'}
+};
+document.addEventListener('visibilitychange',function(){if(document.hidden){if(cs)tickSession(performance.now());persist()}});
+$('tn').onchange=setTone;$('to').onchange=setTone;
+$('fold').onchange=function(){S.fold=this.checked;persist()};
+$('hap').onchange=function(){S.haptics=this.checked;persist()};
+$('vol').oninput=function(){S.vol=this.value/100;persist()};
+$('gear').onclick=function(){renderProg();$('panel').style.display='flex'};
+$('close').onclick=function(){$('panel').style.display='none'};
+$('begin').onclick=begin;
+if(!window.isSecureContext)$('err').textContent='This page was opened from a file or an insecure address, so the browser will block the microphone and Bluetooth. Open it from an https address or from localhost.';
+// Module interface. Events (all via on(name, fn), removable with off): 'frame' {t,cents,voiced,match,clarity,db} every 50 ms;
+// 'beat' {t,rr,lengthening}; 'breath' {n,t0,t1,dur,errMean,pitchSd,clarity,loudDb,loudSd,state,cons}; 'consistency' {score,timing,rate,perMin,run};
+// 'state' {state: baseline | building | coherent}; 'steady' (HRV wave held 10 s, vibration cue on); 'sine6' (6 cycles of the steady wave);
+// 'resonant9' (9 consecutive consistent, resonant breath cycles). A module registers with register({name, on:{event:fn}, init(api)}).
+// The core keeps the audio, the display, and the cues. Modules may change the tone, tone volume, and vibration through setTone,
+// setVolume, and setHaptics, and read the session through state(), breaths(), session(), and store().
+var mods=[];
+function onEv(n,f){(listeners[n]=listeners[n]||[]).push(f)}
+function offEv(n,f){var l=listeners[n]||[],i=l.indexOf(f);if(i>=0)l.splice(i,1)}
+var api={
+  version:2,on:onEv,off:offEv,
+  register:function(m){
+    if(!m||!m.name||mods.some(function(x){return x.name===m.name}))return false;
+    mods.push(m);
+    if(m.on)Object.keys(m.on).forEach(function(k){onEv(k,m.on[k])});
+    if(typeof m.init==='function'){try{m.init(api)}catch(e){}}
+    return true;
+  },
+  modules:function(){return mods.map(function(m){return m.name})},
+  setTone:function(midi){midi=Math.round(midi);if(!(midi>=24&&midi<=107))return false;$('tn').value=((midi%12)+12)%12;$('to').value=Math.floor(midi/12)-1;setTone();return true},
+  setVolume:function(v){S.vol=Math.max(0.05,Math.min(1,v));$('vol').value=Math.round(S.vol*100);persist()},
+  setHaptics:function(b){S.haptics=!!b;$('hap').checked=S.haptics;persist()},
+  breaths:function(){return cs&&cs.br?cs.br.slice():[]},
+  state:function(){return {lvl:lvl,cur:cur,tone:S.toneMidi,hapOn:hapOn,hap:hap,beats:rrHist.length,heart:hstate,consistency:bInfo&&bInfo.ok?bInfo.score:null,run:consRun,breaths:breathN}},
+  session:function(){return cs},store:function(){return store},sessionStart:function(){startSession(performance.now())},
+  feed:feed,rr:pushRR,step:step,_signal:function(c,d){lastClar=c;lastDb=d}
+};
+window.metheorus=api;
+})();
+</script></body></html>
